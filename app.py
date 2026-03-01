@@ -4,6 +4,7 @@ import mediapipe as mp
 import tempfile
 import os
 import numpy as np
+import urllib.request
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
@@ -14,22 +15,24 @@ st.write("Upload a video to detect full-body pose using MediaPipe FULL model.")
 
 uploaded_file = st.file_uploader("Upload Video", type=["mp4", "mov"])
 
-if uploaded_file is not None:
 
-    # Save uploaded video temporarily
-    tfile = tempfile.NamedTemporaryFile(delete=False)
-    tfile.write(uploaded_file.read())
+# =========================
+# Download Pose Model (if not exists)
+# =========================
+@st.cache_resource
+def load_landmarker():
+    model_path = "pose_landmarker_full.task"
 
-    input_video_path = tfile.name
-    output_video_path = "output_pose.mp4"
+    if not os.path.exists(model_path):
+        st.info("Downloading pose model... Please wait...")
+        urllib.request.urlretrieve(
+            "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task",
+            model_path
+        )
+        st.success("Model downloaded successfully!")
 
-    st.info("Processing video... Please wait.")
-
-    # =========================
-    # Load Pose Model
-    # =========================
     base_options = python.BaseOptions(
-        model_asset_path="pose_landmarker_full.task"
+        model_asset_path=model_path
     )
 
     options = vision.PoseLandmarkerOptions(
@@ -38,7 +41,21 @@ if uploaded_file is not None:
         num_poses=1
     )
 
-    landmarker = vision.PoseLandmarker.create_from_options(options)
+    return vision.PoseLandmarker.create_from_options(options)
+
+
+if uploaded_file is not None:
+
+    # Save uploaded video temporarily
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(uploaded_file.read())
+    input_video_path = tfile.name
+    output_video_path = "output_pose.mp4"
+
+    st.info("Processing video... Please wait.")
+
+    # Load landmarker (cached)
+    landmarker = load_landmarker()
 
     # =========================
     # Pose Connections
@@ -64,6 +81,9 @@ if uploaded_file is not None:
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
+
+    if fps == 0:
+        fps = 30  # fallback if fps not detected
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
@@ -92,8 +112,7 @@ if uploaded_file is not None:
                     landmark_points.append((x, y))
 
                 # Draw skeleton
-                for connection in POSE_CONNECTIONS:
-                    start_idx, end_idx = connection
+                for start_idx, end_idx in POSE_CONNECTIONS:
                     if start_idx < len(landmark_points) and end_idx < len(landmark_points):
                         cv2.line(
                             frame,
