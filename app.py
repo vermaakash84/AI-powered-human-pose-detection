@@ -10,17 +10,15 @@ from mediapipe.tasks.python import vision
 
 st.set_page_config(page_title="Pose Detection App", layout="centered")
 
-st.title("🧍 Human Pose Detection Web App")
+st.title("🧍 Human Pose Detection Web App (MediaPipe Tasks API)")
 st.write("Upload a video to detect full-body pose using MediaPipe FULL model.")
 
 uploaded_file = st.file_uploader("Upload Video", type=["mp4", "mov"])
 
-
 # =========================
-# Load Pose Model (Cached)
+# Download Pose Model (if not exists)
 # =========================
-@st.cache_resource
-def load_landmarker():
+def get_model():
     model_path = "pose_landmarker_full.task"
 
     if not os.path.exists(model_path):
@@ -31,17 +29,7 @@ def load_landmarker():
         )
         st.success("Model downloaded successfully!")
 
-    base_options = python.BaseOptions(
-        model_asset_path=model_path
-    )
-
-    options = vision.PoseLandmarkerOptions(
-        base_options=base_options,
-        running_mode=vision.RunningMode.VIDEO,
-        num_poses=1
-    )
-
-    return vision.PoseLandmarker.create_from_options(options)
+    return model_path
 
 
 if uploaded_file is not None:
@@ -54,7 +42,20 @@ if uploaded_file is not None:
 
     st.info("Processing video... Please wait.")
 
-    landmarker = load_landmarker()
+    model_path = get_model()
+
+    # =========================
+    # Create NEW landmarker instance (NO CACHING)
+    # =========================
+    base_options = python.BaseOptions(model_asset_path=model_path)
+
+    options = vision.PoseLandmarkerOptions(
+        base_options=base_options,
+        running_mode=vision.RunningMode.VIDEO,
+        num_poses=1
+    )
+
+    landmarker = vision.PoseLandmarker.create_from_options(options)
 
     # =========================
     # Pose Connections
@@ -81,28 +82,32 @@ if uploaded_file is not None:
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
 
-    # FPS fallback protection
     if fps is None or fps == 0:
         fps = 30
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
 
-    # ✅ FIXED TIMESTAMP LOGIC
     frame_count = 0
 
+    # =========================
+    # Process Frames
+    # =========================
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
-        # Monotonically increasing timestamp (REQUIRED by MediaPipe VIDEO mode)
-        timestamp_ms = int((frame_count / fps) * 1000)
+        # Convert BGR to RGB (IMPORTANT FIX)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         mp_image = mp.Image(
             image_format=mp.ImageFormat.SRGB,
-            data=frame
+            data=rgb_frame
         )
+
+        # Strictly increasing timestamp
+        timestamp_ms = int((frame_count / fps) * 1000)
 
         result = landmarker.detect_for_video(mp_image, timestamp_ms)
 
@@ -118,13 +123,10 @@ if uploaded_file is not None:
                 # Draw skeleton
                 for start_idx, end_idx in POSE_CONNECTIONS:
                     if start_idx < len(landmark_points) and end_idx < len(landmark_points):
-                        cv2.line(
-                            frame,
-                            landmark_points[start_idx],
-                            landmark_points[end_idx],
-                            (0, 255, 0),
-                            3
-                        )
+                        cv2.line(frame,
+                                 landmark_points[start_idx],
+                                 landmark_points[end_idx],
+                                 (0, 255, 0), 3)
 
                 # Draw landmarks
                 for point in landmark_points:
@@ -133,8 +135,14 @@ if uploaded_file is not None:
         out.write(frame)
         frame_count += 1
 
+    # =========================
+    # CLEANUP (VERY IMPORTANT)
+    # =========================
     cap.release()
     out.release()
+    landmarker.close()   # 🔥 prevents crash on rerun
+
+    os.remove(input_video_path)
 
     st.success("Processing Complete!")
 
