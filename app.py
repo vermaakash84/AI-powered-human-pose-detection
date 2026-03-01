@@ -17,7 +17,7 @@ uploaded_file = st.file_uploader("Upload Video", type=["mp4", "mov"])
 
 
 # =========================
-# Download Pose Model (if not exists)
+# Load Pose Model (Cached)
 # =========================
 @st.cache_resource
 def load_landmarker():
@@ -54,7 +54,6 @@ if uploaded_file is not None:
 
     st.info("Processing video... Please wait.")
 
-    # Load landmarker (cached)
     landmarker = load_landmarker()
 
     # =========================
@@ -80,27 +79,32 @@ if uploaded_file is not None:
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    fps = cap.get(cv2.CAP_PROP_FPS)
 
-    if fps == 0:
-        fps = 30  # fallback if fps not detected
+    # FPS fallback protection
+    if fps is None or fps == 0:
+        fps = 30
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
 
-    frame_timestamp = 0
+    # ✅ FIXED TIMESTAMP LOGIC
+    frame_count = 0
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
+        # Monotonically increasing timestamp (REQUIRED by MediaPipe VIDEO mode)
+        timestamp_ms = int((frame_count / fps) * 1000)
+
         mp_image = mp.Image(
             image_format=mp.ImageFormat.SRGB,
             data=frame
         )
 
-        result = landmarker.detect_for_video(mp_image, frame_timestamp)
+        result = landmarker.detect_for_video(mp_image, timestamp_ms)
 
         if result.pose_landmarks:
             for pose_landmarks in result.pose_landmarks:
@@ -127,7 +131,7 @@ if uploaded_file is not None:
                     cv2.circle(frame, point, 5, (0, 0, 255), -1)
 
         out.write(frame)
-        frame_timestamp += int(1000 / fps)
+        frame_count += 1
 
     cap.release()
     out.release()
